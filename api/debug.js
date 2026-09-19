@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   try {
     if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL missing");
     const sql = neon(process.env.DATABASE_URL);
-    const rows = await sql("SELECT 1 AS ok");
+    const rows = await sql.query("SELECT 1 AS ok");
     result.database = { ok: Number(rows?.[0]?.ok) === 1 };
   } catch (e) {
     result.database = { ok: false, error: String(e.message || e).slice(0, 300) };
