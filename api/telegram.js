@@ -70,6 +70,18 @@ async function handleCommand(msg, req) {
         "Я считаю каждое вхождение <code>туз</code> / <code>tuz</code> в группах.\n\n" +
         "Добавьте меня в группу, отключите Privacy Mode через @BotFather и выполните там <code>/setup</code>."
       );
+    } else if (command === "/rules") {
+      await send(
+        chatId,
+        "📌 <b>Правила подсчёта</b>\n\n" +
+        "• каждое вхождение <code>туз</code> или <code>tuz</code> = +1;\n" +
+        "• регистр не важен;\n" +
+        "• корень внутри более длинного слова тоже считается;\n" +
+        "• <code>Bluetooth</code> не считается;\n" +
+        "• три совпадения в одном сообщении = +3."
+      );
+    } else if (["/setup", "/leaderboard", "/top", "/me", "/web"].includes(command)) {
+      await send(chatId, "Эта команда работает <b>в группе</b>, где я веду лидерборд.");
     }
     return true;
   }
