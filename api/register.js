@@ -28,7 +28,8 @@ export default async function handler(req, res) {
         { command: "setup", description: "Создать и закрепить лидерборд" },
         { command: "leaderboard", description: "Показать текущий топ" },
         { command: "me", description: "Показать мой счёт" },
-        { command: "rules", description: "Правила подсчёта" },
+        { command: "rules", description: "Правила и античит" },
+        { command: "undo", description: "Админ: отменить очки за сообщение" },
         { command: "web", description: "Открыть веб-лидерборд" }
       ]
     });
