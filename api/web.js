@@ -1,11 +1,3 @@
-function esc(value = "") {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
 export default function handler(req, res) {
   if (req.method !== "GET") return res.status(405).send("Method not allowed");
 
@@ -60,7 +52,14 @@ footer{text-align:center;color:rgba(255,255,255,.32);font-size:11px;padding:18px
 <script>
 const key=${safeKey};
 const medals=["🥇","🥈","🥉"];
-const esc=s=>String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\\"":"&quot;","'":"&#039;"}[m]));
+function esc(s){
+  return String(s)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll(String.fromCharCode(34),"&quot;")
+    .replaceAll("'","&#039;");
+}
 async function refresh(){
   try{
     const r=await fetch("/api/board?key="+encodeURIComponent(key),{cache:"no-store"});
