@@ -44,23 +44,47 @@ async function isCreator(chatId, userId) {
   }
 }
 
-async function refreshPinned(chatId) {
-  const group = await getGroup(chatId);
-  if (!group?.leaderboard_message_id) return;
+async function refreshPinned(chatId, { pin = false } = {}) {
+  const text = await leaderboardText(chatId);
+  let group = await getGroup(chatId);
+  let messageId = group?.leaderboard_message_id || null;
 
-  try {
-    await tg("editMessageText", {
-      chat_id: chatId,
-      message_id: group.leaderboard_message_id,
-      text: await leaderboardText(chatId),
-      parse_mode: "HTML",
-      disable_web_page_preview: true
-    });
-  } catch (error) {
-    if (!String(error.message).includes("message is not modified")) {
-      console.error("refreshPinned", error);
+  if (messageId) {
+    try {
+      await tg("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      });
+    } catch (error) {
+      if (!String(error.message).includes("message is not modified")) {
+        console.error("refreshPinned edit failed, recreating board", error);
+        messageId = null;
+      }
     }
   }
+
+  if (!messageId) {
+    const board = await send(chatId, text);
+    messageId = board.message_id;
+    await setLeaderboardMessage(chatId, messageId);
+  }
+
+  if (pin) {
+    try {
+      await tg("pinChatMessage", {
+        chat_id: chatId,
+        message_id: messageId,
+        disable_notification: true
+      });
+    } catch (error) {
+      console.error("refreshPinned pin failed", error);
+    }
+  }
+
+  return messageId;
 }
 
 function baseUrl(req) {
@@ -135,8 +159,7 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/leaderboard" || command === "/top") {
-    await refreshPinned(chatId);
-    await send(chatId, await leaderboardText(chatId));
+    await refreshPinned(chatId, { pin: true });
     return true;
   }
 
