@@ -35,6 +35,15 @@ async function isAdmin(chatId, userId) {
   }
 }
 
+async function isCreator(chatId, userId) {
+  try {
+    const member = await tg("getChatMember", { chat_id: chatId, user_id: userId });
+    return member.status === "creator";
+  } catch {
+    return false;
+  }
+}
+
 async function refreshPinned(chatId) {
   const group = await getGroup(chatId);
   if (!group?.leaderboard_message_id) return;
@@ -71,7 +80,7 @@ function rulesText() {
     "• 🛡 максимум +7 очков одному человеку за 60 секунд;\n" +
     "• подписи к фото и видео тоже считаются;\n" +
     "• после редактирования сообщения результат пересчитывается;\n" +
-    "• администратор может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки."
+    "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки."
   );
 }
 
@@ -146,8 +155,8 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/undo") {
-    if (!await isAdmin(chatId, msg.from.id)) {
-      await send(chatId, "Команду <code>/undo</code> может использовать только администратор.");
+    if (!await isCreator(chatId, msg.from.id)) {
+      await send(chatId, "Команду <code>/undo</code> может использовать только <b>создатель группы</b>.");
       return true;
     }
 
