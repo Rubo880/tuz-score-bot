@@ -117,6 +117,7 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/leaderboard" || command === "/top") {
+    await refreshPinned(chatId);
     await send(chatId, await leaderboardText(chatId));
     return true;
   }
