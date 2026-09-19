@@ -3,6 +3,7 @@ import {
   ensureGroup,
   getGroup,
   getUserScore,
+  invalidateMessage,
   processMessage,
   setLeaderboardMessage
 } from "../lib/db.js";
@@ -58,6 +59,22 @@ function baseUrl(req) {
   return host ? "https://" + host : "";
 }
 
+function rulesText() {
+  return (
+    "📌 <b>Правила подсчёта</b>\n\n" +
+    "• каждое вхождение <code>туз</code> или <code>tuz</code> = +1;\n" +
+    "• регистр не важен: <code>ТУЗ</code>, <code>ТуЗ</code>, <code>TUZ</code>, <code>TuZ</code>;\n" +
+    "• корень может быть частью более длинного слова: <code>растузовка</code> считается;\n" +
+    "• <code>Bluetooth</code> не считается;\n" +
+    "• 1–3 вхождения в одном сообщении считаются обычно;\n" +
+    "• 🛡 <b>античит:</b> 4+ вхождения в одном сообщении = 0 очков за всё сообщение;\n" +
+    "• 🛡 максимум +5 очков одному человеку за 60 секунд;\n" +
+    "• подписи к фото и видео тоже считаются;\n" +
+    "• после редактирования сообщения результат пересчитывается;\n" +
+    "• администратор может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки."
+  );
+}
+
 async function handleCommand(msg, req) {
   const raw = (msg.text || "").trim().split(/\s+/)[0] || "";
   const command = raw.toLowerCase().split("@")[0];
@@ -67,20 +84,12 @@ async function handleCommand(msg, req) {
     if (command === "/start") {
       await send(
         chatId,
-        "Я считаю каждое вхождение <code>туз</code> / <code>tuz</code> в группах.\n\n" +
+        "Я считаю вхождения <code>туз</code> / <code>tuz</code> в группах и защищаю рейтинг от спама.\n\n" +
         "Добавьте меня в группу, отключите Privacy Mode через @BotFather и выполните там <code>/setup</code>."
       );
     } else if (command === "/rules") {
-      await send(
-        chatId,
-        "📌 <b>Правила подсчёта</b>\n\n" +
-        "• каждое вхождение <code>туз</code> или <code>tuz</code> = +1;\n" +
-        "• регистр не важен;\n" +
-        "• корень внутри более длинного слова тоже считается;\n" +
-        "• <code>Bluetooth</code> не считается;\n" +
-        "• три совпадения в одном сообщении = +3."
-      );
-    } else if (["/setup", "/leaderboard", "/top", "/me", "/web"].includes(command)) {
+      await send(chatId, rulesText());
+    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo"].includes(command)) {
       await send(chatId, "Эта команда работает <b>в группе</b>, где я веду лидерборд.");
     }
     return true;
@@ -132,17 +141,29 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/rules") {
-    await send(
-      chatId,
-      "📌 <b>Правила подсчёта</b>\n\n" +
-      "• каждое вхождение <code>туз</code> или <code>tuz</code> = +1;\n" +
-      "• регистр не важен: <code>ТУЗ</code>, <code>ТуЗ</code>, <code>TUZ</code>, <code>TuZ</code>;\n" +
-      "• корень может быть частью более длинного слова: <code>растузовка</code> считается;\n" +
-      "• <code>Bluetooth</code> не считается;\n" +
-      "• три подходящих вхождения в одном сообщении = +3;\n" +
-      "• подписи к фото и видео тоже считаются;\n" +
-      "• после редактирования сообщения результат пересчитывается."
-    );
+    await send(chatId, rulesText());
+    return true;
+  }
+
+  if (command === "/undo") {
+    if (!await isAdmin(chatId, msg.from.id)) {
+      await send(chatId, "Команду <code>/undo</code> может использовать только администратор.");
+      return true;
+    }
+
+    const target = msg.reply_to_message;
+    if (!target) {
+      await send(chatId, "Ответь командой <code>/undo</code> прямо на читерское сообщение.");
+      return true;
+    }
+
+    const removed = await invalidateMessage(chatId, target.message_id);
+    if (removed > 0) {
+      await refreshPinned(chatId);
+      await send(chatId, "🛡 Античит: снято <b>" + removed + "</b> очков за это сообщение.");
+    } else {
+      await send(chatId, "За это сообщение уже нет начисленных очков.");
+    }
     return true;
   }
 
