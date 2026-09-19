@@ -15,7 +15,8 @@ export default async function handler(req, res) {
     if (!base) return res.status(400).json({ ok: false, error: "host_missing" });
 
     const webhookUrl = base + "/api/telegram";
-    const dropPending = String(req.query?.drop || "") === "1";
+    const requestUrl = new URL(req.url || "/api/register", base);
+    const dropPending = requestUrl.searchParams.get("drop") === "1";
 
     await tg("setWebhook", {
       url: webhookUrl,
@@ -41,7 +42,9 @@ export default async function handler(req, res) {
       ok: true,
       webhook: info.url,
       pending_update_count: info.pending_update_count,
-      dropped_pending_updates: dropPending
+      dropped_pending_updates: dropPending,
+      last_error_message: info.last_error_message || null,
+      last_error_date: info.last_error_date || null
     });
   } catch (error) {
     console.error("register webhook error", error);
