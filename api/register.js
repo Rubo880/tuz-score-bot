@@ -15,12 +15,13 @@ export default async function handler(req, res) {
     if (!base) return res.status(400).json({ ok: false, error: "host_missing" });
 
     const webhookUrl = base + "/api/telegram";
+    const dropPending = String(req.query?.drop || "") === "1";
 
     await tg("setWebhook", {
       url: webhookUrl,
       secret_token: WEBHOOK_SECRET,
       allowed_updates: ["message", "edited_message"],
-      drop_pending_updates: false
+      drop_pending_updates: dropPending
     });
 
     await tg("setMyCommands", {
@@ -29,7 +30,7 @@ export default async function handler(req, res) {
         { command: "leaderboard", description: "Показать текущий топ" },
         { command: "me", description: "Показать мой счёт" },
         { command: "rules", description: "Правила и античит" },
-        { command: "undo", description: "Админ: отменить очки за сообщение" },
+        { command: "undo", description: "Владелец: отменить очки за сообщение" },
         { command: "web", description: "Открыть веб-лидерборд" }
       ]
     });
@@ -39,7 +40,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       webhook: info.url,
-      pending_update_count: info.pending_update_count
+      pending_update_count: info.pending_update_count,
+      dropped_pending_updates: dropPending
     });
   } catch (error) {
     console.error("register webhook error", error);
