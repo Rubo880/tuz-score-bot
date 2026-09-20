@@ -1,9 +1,11 @@
 import crypto from "crypto";
 import {
-  applyTuzRoll,
+  applyGroupTuzRoll,
   displayName,
   ensureGroup,
   getGroup,
+  getRandomRollTarget,
+  getUserById,
   getUserScore,
   invalidateMessage,
   processMessage,
@@ -156,7 +158,8 @@ function rulesText() {
     "• подписи к фото и видео тоже считаются;\n" +
     "• после редактирования сообщения результат пересчитывается;\n" +
     "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки;\n" +
-    "• <code>/tuzroll</code> — раз в 24 часа: либо <b>Козырной туз</b> (+1…+20), либо <b>Опущенный туз</b> (−1…−15); большие значения выпадают реже;\n" +
+    "• <code>/tuzroll</code> — один общий розыгрыш на всю группу раз в 24 часа: случайному участнику выпадает либо <b>Козырной туз</b> (+1…+20), либо <b>Опущенный туз</b> (−1…−15); большие значения выпадают реже;\n" +
+    "• в минус уходить можно: например, при счёте 3 и результате −10 станет −7;\n" +
     "• каждый день бот автоматически объявляет <b>Тузоида дня</b> по числу засчитанных упоминаний за сутки."
   );
 }
@@ -254,65 +257,81 @@ async function handleCommand(msg, req) {
 
 
   if (command === "/tuzroll" || command === "/roll") {
+    const candidate = await getRandomRollTarget(chatId, msg.from);
+    if (!candidate) {
+      await send(chatId, "Пока некого выбирать для <b>Tuz Roll</b>.");
+      return true;
+    }
+
     const fate = rollTuzFate();
-    const result = await applyTuzRoll(
+    const result = await applyGroupTuzRoll(
       chatId,
-      msg.from,
+      candidate.user_id,
       fate.kind,
       fate.value,
       fate.delta
     );
 
+    if (!result) {
+      await send(chatId, "Не удалось провести <b>Tuz Roll</b>. Попробуй ещё раз.");
+      return true;
+    }
+
+    const applied = result.was_applied === true || String(result.was_applied) === "true";
+    const kind = result.result_kind;
+    const value = Number(result.result_value || 0);
+    const delta = Number(result.result_delta || 0);
+    const score = Number(result.new_score || 0);
     const remaining = Number(result.seconds_remaining || 0);
-    if (remaining > 0) {
+    const target = await getUserById(chatId, result.result_target_user_id);
+    const targetName = escapeHtml(displayName(target || { id: result.result_target_user_id }));
+
+    if (!applied) {
+      const title = kind === "kozyrnoy" ? "🃏 <b>КОЗЫРНОЙ ТУЗ</b>" : "💀 <b>ОПУЩЕННЫЙ ТУЗ</b>";
+      const sign = delta >= 0 ? "+" : "−";
       await send(
         chatId,
-        "⏳ <b>Туз уже был вытянут.</b>\nСледующая попытка через <b>" +
+        "⏳ <b>Tuz Roll уже был разыгран.</b>\n\n" +
+          title +
+          "\n" +
+          targetName +
+          " — <b>" +
+          sign +
+          Math.abs(delta) +
+          "</b> очков.\n\nСледующий выбор через <b>" +
           formatCooldown(remaining) +
           "</b>."
       );
       return true;
     }
 
-    const applied = Number(result.applied_delta || 0);
-    const score = Number(result.new_score || 0);
-    const name = escapeHtml(displayName(msg.from));
-
-    if (fate.kind === "kozyrnoy") {
+    if (kind === "kozyrnoy") {
       await send(
         chatId,
         "🃏 <b>КОЗЫРНОЙ ТУЗ</b>\n\n" +
-          name +
-          " вытянул козырного туза: <b>+" +
-          fate.value +
-          "</b> очков.\n\nСчёт: <b>" +
+          "Сегодня козырь достаётся <b>" +
+          targetName +
+          "</b>: <b>+" +
+          value +
+          "</b> очков.\n\nНовый счёт: <b>" +
           score +
-          "</b>"
+          "</b>\n\nСледующий Tuz Roll — через 24 часа."
       );
     } else {
-      const actuallyRemoved = Math.abs(Math.min(applied, 0));
-      const extra =
-        actuallyRemoved < fate.value
-          ? "\n<i>Снято фактически: " + actuallyRemoved + " — счёт не уходит ниже нуля.</i>"
-          : "";
-
       await send(
         chatId,
         "💀 <b>ОПУЩЕННЫЙ ТУЗ</b>\n\n" +
-          name +
-          " не повезло: выпало <b>−" +
-          fate.value +
-          "</b> очков." +
-          extra +
-          "\n\nСчёт: <b>" +
+          "Сегодня не повезло <b>" +
+          targetName +
+          "</b>: <b>−" +
+          value +
+          "</b> очков.\n\nНовый счёт: <b>" +
           score +
-          "</b>"
+          "</b>\n\nСледующий Tuz Roll — через 24 часа."
       );
     }
 
-    if (applied !== 0) {
-      await refreshPinned(chatId);
-    }
+    await refreshPinned(chatId);
     return true;
   }
 
