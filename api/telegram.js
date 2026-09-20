@@ -1,4 +1,6 @@
+import crypto from "crypto";
 import {
+  applyTuzRoll,
   displayName,
   ensureGroup,
   getGroup,
@@ -87,6 +89,55 @@ async function refreshPinned(chatId, { pin = false } = {}) {
   return messageId;
 }
 
+
+function weightedPick(items) {
+  const total = items.reduce((sum, item) => sum + item.weight, 0);
+  let roll = crypto.randomInt(total);
+  for (const item of items) {
+    if (roll < item.weight) return item.value;
+    roll -= item.weight;
+  }
+  return items[items.length - 1].value;
+}
+
+function rollTuzFate() {
+  const positive = crypto.randomInt(2) === 0;
+
+  const minus = [
+    { value: 1, weight: 5 }, { value: 2, weight: 7 }, { value: 3, weight: 9 },
+    { value: 4, weight: 11 }, { value: 5, weight: 14 }, { value: 6, weight: 14 },
+    { value: 7, weight: 12 }, { value: 8, weight: 9 }, { value: 9, weight: 7 },
+    { value: 10, weight: 5 }, { value: 11, weight: 3 }, { value: 12, weight: 2 },
+    { value: 13, weight: 1 }, { value: 14, weight: 1 }, { value: 15, weight: 1 }
+  ];
+
+  const plus = [
+    { value: 1, weight: 5 }, { value: 2, weight: 7 }, { value: 3, weight: 9 },
+    { value: 4, weight: 11 }, { value: 5, weight: 14 }, { value: 6, weight: 14 },
+    { value: 7, weight: 12 }, { value: 8, weight: 10 }, { value: 9, weight: 8 },
+    { value: 10, weight: 6 }, { value: 11, weight: 5 }, { value: 12, weight: 4 },
+    { value: 13, weight: 3 }, { value: 14, weight: 2 }, { value: 15, weight: 2 },
+    { value: 16, weight: 1 }, { value: 17, weight: 1 }, { value: 18, weight: 1 },
+    { value: 19, weight: 1 }, { value: 20, weight: 1 }
+  ];
+
+  const value = weightedPick(positive ? plus : minus);
+  return {
+    kind: positive ? "kozyrnoy" : "opushenniy",
+    value,
+    delta: positive ? value : -value
+  };
+}
+
+function formatCooldown(seconds) {
+  const totalMinutes = Math.max(1, Math.ceil(Number(seconds || 0) / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours <= 0) return minutes + " мин.";
+  if (minutes === 0) return hours + " ч.";
+  return hours + " ч. " + minutes + " мин.";
+}
+
 function baseUrl(req) {
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   return host ? "https://" + host : "";
@@ -101,10 +152,12 @@ function rulesText() {
     "• <code>Bluetooth</code> не считается;\n" +
     "• 1–3 вхождения в одном сообщении считаются обычно;\n" +
     "• 🛡 <b>античит:</b> 4+ вхождения в одном сообщении = 0 очков за всё сообщение;\n" +
-    "• 🛡 максимум +7 очков одному человеку за 60 секунд;\n" +
+    "• 🛡 максимум +5 очков одному человеку за 60 секунд;\n" +
     "• подписи к фото и видео тоже считаются;\n" +
     "• после редактирования сообщения результат пересчитывается;\n" +
-    "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки."
+    "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки;\n" +
+    "• <code>/tuzroll</code> — раз в 24 часа: либо <b>Козырной туз</b> (+1…+20), либо <b>Опущенный туз</b> (−1…−15); большие значения выпадают реже;\n" +
+    "• каждый день бот автоматически объявляет <b>Тузоида дня</b> по числу засчитанных упоминаний за сутки."
   );
 }
 
@@ -122,7 +175,7 @@ async function handleCommand(msg, req) {
       );
     } else if (command === "/rules") {
       await send(chatId, rulesText());
-    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo"].includes(command)) {
+    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo", "/tuzroll", "/roll"].includes(command)) {
       await send(chatId, "Эта команда работает <b>в группе</b>, где я веду лидерборд.");
     }
     return true;
@@ -195,6 +248,70 @@ async function handleCommand(msg, req) {
       await send(chatId, "🛡 Античит: снято <b>" + removed + "</b> очков за это сообщение.");
     } else {
       await send(chatId, "За это сообщение уже нет начисленных очков.");
+    }
+    return true;
+  }
+
+
+  if (command === "/tuzroll" || command === "/roll") {
+    const fate = rollTuzFate();
+    const result = await applyTuzRoll(
+      chatId,
+      msg.from,
+      fate.kind,
+      fate.value,
+      fate.delta
+    );
+
+    const remaining = Number(result.seconds_remaining || 0);
+    if (remaining > 0) {
+      await send(
+        chatId,
+        "⏳ <b>Туз уже был вытянут.</b>\nСледующая попытка через <b>" +
+          formatCooldown(remaining) +
+          "</b>."
+      );
+      return true;
+    }
+
+    const applied = Number(result.applied_delta || 0);
+    const score = Number(result.new_score || 0);
+    const name = escapeHtml(displayName(msg.from));
+
+    if (fate.kind === "kozyrnoy") {
+      await send(
+        chatId,
+        "🃏 <b>КОЗЫРНОЙ ТУЗ</b>\n\n" +
+          name +
+          " вытянул козырного туза: <b>+" +
+          fate.value +
+          "</b> очков.\n\nСчёт: <b>" +
+          score +
+          "</b>"
+      );
+    } else {
+      const actuallyRemoved = Math.abs(Math.min(applied, 0));
+      const extra =
+        actuallyRemoved < fate.value
+          ? "\n<i>Снято фактически: " + actuallyRemoved + " — счёт не уходит ниже нуля.</i>"
+          : "";
+
+      await send(
+        chatId,
+        "💀 <b>ОПУЩЕННЫЙ ТУЗ</b>\n\n" +
+          name +
+          " не повезло: выпало <b>−" +
+          fate.value +
+          "</b> очков." +
+          extra +
+          "\n\nСчёт: <b>" +
+          score +
+          "</b>"
+      );
+    }
+
+    if (applied !== 0) {
+      await refreshPinned(chatId);
     }
     return true;
   }
