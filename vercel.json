@@ -1,5 +1,8 @@
 {
   "rewrites": [
     { "source": "/g/:key", "destination": "/api/web?key=:key" }
+  ],
+  "crons": [
+    { "path": "/api/daily-tuzoid", "schedule": "0 21 * * *" }
   ]
 }
