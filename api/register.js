@@ -32,6 +32,7 @@ export default async function handler(req, res) {
         { command: "me", description: "Показать мой счёт" },
         { command: "rules", description: "Правила и античит" },
         { command: "undo", description: "Владелец: отменить очки за сообщение" },
+        { command: "tuzroll", description: "Козырной или опущенный туз раз в 24ч" },
         { command: "web", description: "Открыть веб-лидерборд" }
       ]
     });
