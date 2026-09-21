@@ -21,14 +21,17 @@ export default async function handler(req, res) {
     await tg("setWebhook", {
       url: webhookUrl,
       secret_token: WEBHOOK_SECRET,
-      allowed_updates: ["message", "edited_message"],
+      allowed_updates: ["message", "edited_message", "callback_query"],
       drop_pending_updates: dropPending
     });
 
     await tg("setMyCommands", {
       commands: [
         { command: "setup", description: "Создать и закрепить лидерборд" },
-        { command: "leaderboard", description: "Показать текущий топ" },
+        { command: "leaderboard", description: "Обновить текущий топ" },
+        { command: "top", description: "Обновить текущий топ" },
+        { command: "grow", description: "Растить туз раз в день" },
+        { command: "pvp", description: "PvP-дуэль: /pvp 10" },
         { command: "me", description: "Показать мой счёт" },
         { command: "rules", description: "Правила и античит" },
         { command: "undo", description: "Владелец: отменить очки за сообщение" },
