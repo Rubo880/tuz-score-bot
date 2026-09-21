@@ -1,6 +1,8 @@
 import crypto from "crypto";
 import {
+  applyGrow,
   applyGroupTuzRoll,
+  createPvpChallenge,
   displayName,
   ensureGroup,
   getGroup,
@@ -9,7 +11,8 @@ import {
   getUserScore,
   invalidateMessage,
   processMessage,
-  setLeaderboardMessage
+  setLeaderboardMessage,
+  settlePvpChallenge
 } from "../lib/db.js";
 import { leaderboardText } from "../lib/leaderboard.js";
 import { escapeHtml, tg, WEBHOOK_SECRET } from "../lib/telegram.js";
@@ -21,12 +24,13 @@ function getBody(req) {
   return req.body || {};
 }
 
-async function send(chatId, text) {
+async function send(chatId, text, extra = {}) {
   return tg("sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: "HTML",
-    disable_web_page_preview: true
+    disable_web_page_preview: true,
+    ...extra
   });
 }
 
@@ -140,6 +144,14 @@ function formatCooldown(seconds) {
   return hours + " ч. " + minutes + " мин.";
 }
 
+
+function signed(value) {
+  const n = Number(value || 0);
+  if (n > 0) return "+" + n;
+  if (n < 0) return "−" + Math.abs(n);
+  return "0";
+}
+
 function baseUrl(req) {
   const host = req.headers["x-forwarded-host"] || req.headers.host;
   return host ? "https://" + host : "";
@@ -160,6 +172,8 @@ function rulesText() {
     "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки;\n" +
     "• <code>/tuzroll</code> — один общий розыгрыш на всю группу раз в 24 часа: случайному участнику выпадает либо <b>Козырной туз</b> (+1…+20), либо <b>Опущенный туз</b> (−1…−15); большие значения выпадают реже;\n" +
     "• в минус уходить можно: например, при счёте 3 и результате −10 станет −7;\n" +
+    "• <code>/grow</code> — раз в календарный день растит твой туз на случайное значение от −10 до +40; серия дней даёт бонус на 2, 4, 8, 16 и 32-й день;\n" +
+    "• <code>/pvp N</code> — предложить группе дуэль на N очков. Ставка не может превышать твой текущий счёт; сопернику тоже должно хватать очков;\n" +
     "• каждый день бот автоматически объявляет <b>Тузоида дня</b> по числу засчитанных упоминаний за сутки."
   );
 }
@@ -178,7 +192,7 @@ async function handleCommand(msg, req) {
       );
     } else if (command === "/rules") {
       await send(chatId, rulesText());
-    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo", "/tuzroll", "/roll"].includes(command)) {
+    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo", "/tuzroll", "/roll", "/grow", "/pvp"].includes(command)) {
       await send(chatId, "Эта команда работает <b>в группе</b>, где я веду лидерборд.");
     }
     return true;
@@ -216,6 +230,7 @@ async function handleCommand(msg, req) {
 
   if (command === "/leaderboard" || command === "/top") {
     await refreshPinned(chatId, { pin: true });
+    await send(chatId, "🏆 <b>Текущий топ обновлён.</b> Смотри закреплённый лидерборд.");
     return true;
   }
 
@@ -335,6 +350,123 @@ async function handleCommand(msg, req) {
     return true;
   }
 
+
+  if (command === "/grow") {
+    const baseDelta = crypto.randomInt(51) - 10;
+    const result = await applyGrow(chatId, msg.from, baseDelta);
+
+    if (!result) {
+      await send(chatId, "Не удалось вырастить туз. Попробуй ещё раз.");
+      return true;
+    }
+
+    const applied = result.was_applied === true || String(result.was_applied) === "true";
+    const streak = Number(result.result_streak || 0);
+    const bonus = Number(result.result_bonus || 0);
+    const delta = Number(result.result_delta || 0);
+    const score = Number(result.new_score || 0);
+    const remaining = Number(result.seconds_remaining || 0);
+    const name = escapeHtml(displayName(msg.from));
+
+    if (!applied) {
+      await send(
+        chatId,
+        "🌱 <b>Ты уже растил туз сегодня.</b>\n" +
+          name +
+          ", возвращайся через <b>" +
+          formatCooldown(remaining) +
+          "</b>.\n🔥 Серия: <b>" +
+          streak +
+          "</b> дн."
+      );
+      return true;
+    }
+
+    await send(
+      chatId,
+      "🌱 <b>TUZ GROW</b>\n\n" +
+        name +
+        " растит туз...\n" +
+        "🎲 Выпало: <b>" +
+        signed(result.result_base_delta) +
+        "</b>\n" +
+        "🔥 Серия: <b>" +
+        streak +
+        "</b> дн.\n" +
+        "⚡ Бонус серии: <b>+" +
+        bonus +
+        "</b>\n" +
+        "📈 Итоговое изменение: <b>" +
+        signed(delta) +
+        "</b>\n\n" +
+        "🃏 Размер туза: <b>" +
+        score +
+        "</b>"
+    );
+
+    if (delta !== 0) {
+      await refreshPinned(chatId);
+    }
+    return true;
+  }
+
+  if (command === "/pvp") {
+    const parts = (msg.text || "").trim().split(/\s+/);
+    const wager = Number(parts[1]);
+
+    if (!Number.isInteger(wager) || wager <= 0) {
+      await send(
+        chatId,
+        "⚔️ Использование: <code>/pvp 10</code>\nУкажи целое положительное число очков для ставки."
+      );
+      return true;
+    }
+
+    const challenge = await createPvpChallenge(chatId, msg.from, wager);
+
+    if (!challenge?.ok) {
+      if (challenge?.reason === "insufficient_funds") {
+        await send(
+          chatId,
+          "⚔️ Ставка слишком большая.\nТвой текущий счёт: <b>" +
+            Number(challenge.score || 0) +
+            "</b>. Нельзя поставить больше своего счёта."
+        );
+      } else {
+        await send(chatId, "⚔️ Не удалось создать PvP-вызов.");
+      }
+      return true;
+    }
+
+    const name = escapeHtml(displayName(msg.from));
+    await send(
+      chatId,
+      "⚔️ <b>TUZ PVP</b>\n\n" +
+        "<b>" +
+        name +
+        "</b> вызывает группу на дуэль.\n" +
+        "Ставка: <b>" +
+        wager +
+        "</b> очков.\n\n" +
+        "Победитель получает <b>+" +
+        wager +
+        "</b>, проигравший теряет <b>−" +
+        wager +
+        "</b>.\nКто принимает?",
+      {
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text: "⚔️ Принять ставку " + wager,
+              callback_data: "pvp:" + challenge.challenge_id
+            }
+          ]]
+        }
+      }
+    );
+    return true;
+  }
+
   if (command === "/web") {
     const group = await ensureGroup(msg.chat);
     const base = baseUrl(req);
@@ -348,6 +480,124 @@ async function handleCommand(msg, req) {
   return false;
 }
 
+
+async function handleCallback(query) {
+  const data = String(query?.data || "");
+  if (!data.startsWith("pvp:")) return false;
+
+  const msg = query.message;
+  if (!msg?.chat) return true;
+
+  const chatId = msg.chat.id;
+  const challengeId = data.slice(4);
+
+  try {
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "⚔️ Бросаем тузы..."
+    });
+  } catch {}
+
+  const result = await settlePvpChallenge(chatId, challengeId, query.from);
+  if (!result) {
+    await send(chatId, "⚔️ Не удалось завершить PvP.");
+    return true;
+  }
+
+  const status = String(result.result_status || "");
+
+  if (status === "self") {
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Нельзя принять собственный вызов.",
+      show_alert: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (status === "acceptor_funds") {
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "У тебя недостаточно очков для этой ставки.",
+      show_alert: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (status === "creator_funds") {
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: msg.message_id,
+      parse_mode: "HTML",
+      text:
+        "⚔️ <b>TUZ PVP отменён</b>\n\nУ автора вызова больше не хватает очков для ставки <b>" +
+        Number(result.result_wager || 0) +
+        "</b>."
+    });
+    return true;
+  }
+
+  if (status === "expired") {
+    await tg("editMessageText", {
+      chat_id: chatId,
+      message_id: msg.message_id,
+      parse_mode: "HTML",
+      text: "⌛ <b>TUZ PVP истёк.</b> Создай новый вызов командой <code>/pvp N</code>."
+    });
+    return true;
+  }
+
+  if (status === "closed") {
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Эта дуэль уже завершена.",
+      show_alert: true
+    }).catch(() => {});
+    return true;
+  }
+
+  if (status !== "settled") {
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Этот вызов больше недоступен.",
+      show_alert: true
+    }).catch(() => {});
+    return true;
+  }
+
+  const winner = await getUserById(chatId, result.result_winner_id);
+  const loser = await getUserById(chatId, result.result_loser_id);
+  const wager = Number(result.result_wager || 0);
+
+  await tg("editMessageText", {
+    chat_id: chatId,
+    message_id: msg.message_id,
+    parse_mode: "HTML",
+    text:
+      "⚔️ <b>TUZ PVP — РЕЗУЛЬТАТ</b>\n\n" +
+      "Ставка: <b>" +
+      wager +
+      "</b>\n\n" +
+      "🏆 <b>" +
+      escapeHtml(displayName(winner || { id: result.result_winner_id })) +
+      "</b> получает <b>+" +
+      wager +
+      "</b> → <b>" +
+      Number(result.winner_score || 0) +
+      "</b>\n" +
+      "💀 <b>" +
+      escapeHtml(displayName(loser || { id: result.result_loser_id })) +
+      "</b> теряет <b>−" +
+      wager +
+      "</b> → <b>" +
+      Number(result.loser_score || 0) +
+      "</b>"
+  });
+
+  await refreshPinned(chatId);
+  return true;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ ok: false });
@@ -359,13 +609,18 @@ export default async function handler(req, res) {
   }
 
   const update = getBody(req);
+  const callback = update.callback_query;
   const msg = update.message || update.edited_message;
 
-  if (!msg) {
-    return res.status(200).json({ ok: true });
-  }
-
   try {
+    if (callback) {
+      await handleCallback(callback);
+      return res.status(200).json({ ok: true });
+    }
+
+    if (!msg) {
+      return res.status(200).json({ ok: true });
+    }
     if (msg.text?.startsWith("/")) {
       const handled = await handleCommand(msg, req);
       if (handled) return res.status(200).json({ ok: true });
