@@ -491,13 +491,6 @@ async function handleCallback(query) {
   const chatId = msg.chat.id;
   const challengeId = data.slice(4);
 
-  try {
-    await tg("answerCallbackQuery", {
-      callback_query_id: query.id,
-      text: "⚔️ Бросаем тузы..."
-    });
-  } catch {}
-
   const result = await settlePvpChallenge(chatId, challengeId, query.from);
   if (!result) {
     await send(chatId, "⚔️ Не удалось завершить PvP.");
@@ -564,6 +557,11 @@ async function handleCallback(query) {
     }).catch(() => {});
     return true;
   }
+
+  await tg("answerCallbackQuery", {
+    callback_query_id: query.id,
+    text: "⚔️ Дуэль завершена!"
+  }).catch(() => {});
 
   const winner = await getUserById(chatId, result.result_winner_id);
   const loser = await getUserById(chatId, result.result_loser_id);
