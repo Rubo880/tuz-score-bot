@@ -3,6 +3,7 @@ import {
   applyGrow,
   applyGroupTuzRoll,
   createPvpChallenge,
+  claimHumanCheckPrompt,
   displayName,
   ensureGroup,
   getGroup,
@@ -12,6 +13,7 @@ import {
   getUserScore,
   invalidateMessage,
   processMessage,
+  resolveHumanCheck,
   setLeaderboardMessage,
   settlePvpChallenge
 } from "../lib/db.js";
@@ -97,6 +99,60 @@ async function refreshPinned(chatId, { pin = false } = {}) {
 }
 
 
+const HUMAN_EMOJIS = {
+  frog: "🐸",
+  lemon: "🍋",
+  car: "🚗",
+  ace: "🃏",
+  cat: "🐱",
+  rocket: "🚀",
+  pizza: "🍕",
+  ghost: "👻"
+};
+
+function humanCheckOptions(targetCode) {
+  const all = Object.keys(HUMAN_EMOJIS).filter((code) => code !== targetCode);
+  const chosen = [targetCode];
+
+  while (chosen.length < 4 && all.length) {
+    const index = crypto.randomInt(all.length);
+    chosen.push(all.splice(index, 1)[0]);
+  }
+
+  for (let i = chosen.length - 1; i > 0; i -= 1) {
+    const j = crypto.randomInt(i + 1);
+    [chosen[i], chosen[j]] = [chosen[j], chosen[i]];
+  }
+
+  return chosen;
+}
+
+function humanCheckMarkup(challengeId, ownerId, targetCode) {
+  return {
+    inline_keyboard: [[
+      ...humanCheckOptions(targetCode).map((code) => ({
+        text: HUMAN_EMOJIS[code] || "❓",
+        callback_data: "human:" + challengeId + ":" + ownerId + ":" + code
+      }))
+    ]]
+  };
+}
+
+async function sendHumanCheck(chatId, user, check) {
+  const targetEmoji = HUMAN_EMOJIS[check.target_code] || "❓";
+  await send(
+    chatId,
+    "🤖 <b>HUMAN CHECK</b>\n\n" +
+      "<b>" + escapeHtml(displayName(user)) + "</b> набрал 10 обычных очков за 15 минут.\n" +
+      "Подтверди, что это не автоматический фарм: нажми <b>" + targetEmoji + "</b>.\n\n" +
+      "Пока проверка не пройдена, новые очки за <code>туз/tuz</code> не начисляются. " +
+      "После успешной проверки повторный Human Check не появится 2 часа.",
+    {
+      reply_markup: humanCheckMarkup(check.challenge_id, user.id, check.target_code)
+    }
+  );
+}
+
 function weightedPick(items) {
   const total = items.reduce((sum, item) => sum + item.weight, 0);
   let roll = crypto.randomInt(total);
@@ -168,6 +224,7 @@ function rulesText() {
     "• 1–3 вхождения в одном сообщении считаются обычно;\n" +
     "• 🛡 <b>античит:</b> 4+ вхождения в одном сообщении = 0 очков за всё сообщение;\n" +
     "• 🛡 максимум +2 очка одному человеку за 60 секунд;\n" +
+    "• 🤖 если человек набрал 10 обычных очков за 15 минут, бот просит пройти Human Check; до подтверждения новые очки за <code>туз/tuz</code> не начисляются; после успешной проверки действует доверие на 2 часа;\n" +
     "• подписи к фото и видео тоже считаются;\n" +
     "• после редактирования сообщения результат пересчитывается;\n" +
     "• только <b>создатель группы</b> может ответить <code>/undo</code> на читерское сообщение и снять начисленные за него очки;\n" +
@@ -496,9 +553,86 @@ async function handleCommand(msg, req) {
 
 async function handleCallback(query) {
   const data = String(query?.data || "");
+  const msg = query.message;
+
+  if (data.startsWith("human:")) {
+    if (!msg?.chat) return true;
+
+    const parts = data.split(":");
+    const challengeId = parts[1] || "";
+    const ownerId = Number(parts[2]);
+    const choiceCode = parts[3] || "";
+
+    if (!Number.isSafeInteger(ownerId) || query.from.id !== ownerId) {
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Это Human Check другого игрока.",
+        show_alert: true
+      }).catch(() => {});
+      return true;
+    }
+
+    const result = await resolveHumanCheck(
+      msg.chat.id,
+      ownerId,
+      challengeId,
+      choiceCode
+    );
+    const status = String(result?.result_status || "");
+
+    if (status === "passed") {
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Проверка пройдена ✅"
+      }).catch(() => {});
+
+      await tg("editMessageText", {
+        chat_id: msg.chat.id,
+        message_id: msg.message_id,
+        parse_mode: "HTML",
+        text:
+          "✅ <b>HUMAN CHECK ПРОЙДЕН</b>\n\n" +
+          "<b>" + escapeHtml(displayName(query.from)) + "</b> подтвердил, что он человек.\n" +
+          "Обычные очки за <code>туз/tuz</code> снова начисляются. Следующая проверка возможна не раньше чем через 2 часа."
+      });
+      return true;
+    }
+
+    if (status === "wrong") {
+      const nextChallengeId = result.result_challenge_id;
+      const nextTargetCode = result.result_target_code;
+      const targetEmoji = HUMAN_EMOJIS[nextTargetCode] || "❓";
+
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Не та кнопка. Попробуй новую проверку.",
+        show_alert: true
+      }).catch(() => {});
+
+      await tg("editMessageText", {
+        chat_id: msg.chat.id,
+        message_id: msg.message_id,
+        parse_mode: "HTML",
+        text:
+          "🤖 <b>HUMAN CHECK</b>\n\n" +
+          "<b>" + escapeHtml(displayName(query.from)) + "</b>, нажми <b>" + targetEmoji + "</b>.\n\n" +
+          "Пока проверка не пройдена, новые очки за <code>туз/tuz</code> не начисляются.",
+        reply_markup: humanCheckMarkup(nextChallengeId, ownerId, nextTargetCode)
+      });
+      return true;
+    }
+
+    await tg("answerCallbackQuery", {
+      callback_query_id: query.id,
+      text: "Эта проверка уже завершена или устарела.",
+      show_alert: true
+    }).catch(() => {});
+    return true;
+  }
+
   if (!data.startsWith("pvp:")) return false;
 
-  const msg = query.message;
+  if (!msg?.chat) return true;
   if (!msg?.chat) return true;
 
   const chatId = msg.chat.id;
@@ -661,6 +795,17 @@ export default async function handler(req, res) {
     const delta = await processMessage(msg);
     if (delta !== 0) {
       await refreshPinned(msg.chat.id);
+    }
+
+    if (
+      msg.from &&
+      !msg.from.is_bot &&
+      ["group", "supergroup"].includes(msg.chat?.type)
+    ) {
+      const humanCheck = await claimHumanCheckPrompt(msg.chat.id, msg.from.id);
+      if (humanCheck) {
+        await sendHumanCheck(msg.chat.id, msg.from, humanCheck);
+      }
     }
 
     return res.status(200).json({ ok: true });
