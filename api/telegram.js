@@ -7,6 +7,7 @@ import {
   ensureGroup,
   getGroup,
   getRandomRollTarget,
+  getPvpStats,
   getUserById,
   getUserScore,
   invalidateMessage,
@@ -235,10 +236,22 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/me") {
-    const score = await getUserScore(chatId, msg.from.id);
+    const [score, pvp] = await Promise.all([
+      getUserScore(chatId, msg.from.id),
+      getPvpStats(chatId, msg.from.id)
+    ]);
+    const winRate = pvp.battles_total > 0
+      ? ((pvp.wins / pvp.battles_total) * 100).toFixed(2)
+      : "0.00";
+
     await send(
       chatId,
-      "👤 <b>" + escapeHtml(displayName(msg.from)) + "</b>\nТвой счёт: <b>" + score + "</b>"
+      "👤 <b>" + escapeHtml(displayName(msg.from)) + "</b>\n" +
+        "🃏 Твой счёт: <b>" + score + "</b>\n\n" +
+        "⚔️ <b>PvP-статистика</b>\n" +
+        "🏆 Процент выигрышей: <b>" + winRate + "%</b>\n" +
+        "🔥 Текущий стрик побед: <b>" + pvp.win_streak_current + "</b>\n" +
+        "👑 Лучший стрик побед: <b>" + pvp.win_streak_max + "</b>"
     );
     return true;
   }
