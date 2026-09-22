@@ -566,6 +566,17 @@ async function handleCallback(query) {
   const winner = await getUserById(chatId, result.result_winner_id);
   const loser = await getUserById(chatId, result.result_loser_id);
   const wager = Number(result.result_wager || 0);
+  const winnerBattles = Number(result.winner_battles_total || 0);
+  const winnerWins = Number(result.winner_wins || 0);
+  const winnerStreak = Number(result.winner_win_streak || 0);
+  const loserBattles = Number(result.loser_battles_total || 0);
+  const loserWins = Number(result.loser_wins || 0);
+  const winnerWinRate = winnerBattles > 0
+    ? ((winnerWins / winnerBattles) * 100).toFixed(2)
+    : "0.00";
+  const loserWinRate = loserBattles > 0
+    ? ((loserWins / loserBattles) * 100).toFixed(2)
+    : "0.00";
 
   await tg("editMessageText", {
     chat_id: chatId,
@@ -589,7 +600,17 @@ async function handleCallback(query) {
       wager +
       "</b> → <b>" +
       Number(result.loser_score || 0) +
-      "</b>"
+      "</b>\n\n" +
+      "📊 <b>PvP-статистика</b>\n" +
+      "Процент выигрышей победителя — <b>" +
+      winnerWinRate +
+      "%</b>\n" +
+      "🔥 Текущая серия побед — <b>" +
+      winnerStreak +
+      "</b>\n" +
+      "Процент выигрышей проигравшего — <b>" +
+      loserWinRate +
+      "%</b>"
   });
 
   await refreshPinned(chatId);
