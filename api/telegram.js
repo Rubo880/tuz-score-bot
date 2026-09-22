@@ -633,7 +633,6 @@ async function handleCallback(query) {
   if (!data.startsWith("pvp:")) return false;
 
   if (!msg?.chat) return true;
-  if (!msg?.chat) return true;
 
   const chatId = msg.chat.id;
   const challengeId = data.slice(4);
