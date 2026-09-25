@@ -29,14 +29,14 @@ export default async function handler(req, res) {
       commands: [
         { command: "setup", description: "Создать и закрепить лидерборд" },
         { command: "leaderboard", description: "Обновить текущий топ" },
-        { command: "top", description: "Обновить текущий топ" },
         { command: "grow", description: "Растить туз раз в день" },
         { command: "pvp", description: "PvP-дуэль: /pvp 10" },
         { command: "me", description: "Показать мой счёт" },
+        { command: "vault", description: "Хранилище: сбор и щит" },
+        { command: "raid", description: "Налёт: /raid @username или ответом" },
         { command: "rules", description: "Правила и античит" },
         { command: "undo", description: "Владелец: отменить очки за сообщение" },
-        { command: "tuzroll", description: "Общий Tuz Roll группы раз в 24ч" },
-        { command: "web", description: "Открыть веб-лидерборд" }
+        { command: "tuzroll", description: "Общий Tuz Roll группы раз в 24ч" }
       ]
     });
 
