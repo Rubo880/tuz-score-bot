@@ -25,30 +25,61 @@ import {
 import { leaderboardText } from "../lib/leaderboard.js";
 import { escapeHtml, tg, WEBHOOK_SECRET } from "../lib/telegram.js";
 
-let commandSyncPromise;
+const BOT_COMMANDS = [
+  { command: "setup", description: "Создать и закрепить лидерборд" },
+  { command: "leaderboard", description: "Обновить текущий топ" },
+  { command: "grow", description: "Растить туз раз в день" },
+  { command: "pvp", description: "PvP-дуэль: /pvp 10" },
+  { command: "me", description: "Показать мой счёт" },
+  { command: "vault", description: "Хранилище: сбор и щит" },
+  { command: "raid", description: "Налёт: /raid @username или ответом" },
+  { command: "rules", description: "Правила и античит" },
+  { command: "undo", description: "Владелец: отменить очки за сообщение" },
+  { command: "tuzroll", description: "Общий Tuz Roll группы раз в 24ч" }
+];
 
-async function syncBotCommands() {
-  if (!commandSyncPromise) {
-    commandSyncPromise = tg("setMyCommands", {
-      commands: [
-        { command: "setup", description: "Создать и закрепить лидерборд" },
-        { command: "leaderboard", description: "Обновить текущий топ" },
-        { command: "grow", description: "Растить туз раз в день" },
-        { command: "pvp", description: "PvP-дуэль: /pvp 10" },
-        { command: "me", description: "Показать мой счёт" },
-        { command: "vault", description: "Хранилище: сбор и щит" },
-        { command: "raid", description: "Налёт: /raid @username или ответом" },
-        { command: "rules", description: "Правила и античит" },
-        { command: "undo", description: "Владелец: отменить очки за сообщение" },
-        { command: "tuzroll", description: "Общий Tuz Roll группы раз в 24ч" }
-      ]
-    }).catch((error) => {
-      commandSyncPromise = null;
-      console.error("setMyCommands sync failed", error);
-      return null;
+async function syncBotCommands(chatId = null) {
+  try {
+    // Telegram can keep different command lists for different scopes.
+    // Clear the old scoped menus first so removed commands such as /top
+    // and /web cannot survive in a more specific group scope.
+    const scopes = [
+      { type: "default" },
+      { type: "all_private_chats" },
+      { type: "all_group_chats" },
+      { type: "all_chat_administrators" }
+    ];
+
+    if (chatId) {
+      scopes.push(
+        { type: "chat", chat_id: chatId },
+        { type: "chat_administrators", chat_id: chatId }
+      );
+    }
+
+    for (const scope of scopes) {
+      for (const language_code of [undefined, "ru", "en"]) {
+        const body = { scope };
+        if (language_code) body.language_code = language_code;
+        await tg("deleteMyCommands", body).catch(() => {});
+      }
+    }
+
+    await tg("setMyCommands", {
+      scope: { type: "default" },
+      commands: BOT_COMMANDS
     });
+
+    await tg("setMyCommands", {
+      scope: { type: "all_group_chats" },
+      commands: BOT_COMMANDS
+    });
+
+    return true;
+  } catch (error) {
+    console.error("setMyCommands sync failed", error);
+    return false;
   }
-  return commandSyncPromise;
 }
 
 function getBody(req) {
@@ -394,7 +425,7 @@ async function handleCommand(msg, req) {
   const command = raw.toLowerCase().split("@")[0];
   const chatId = msg.chat.id;
 
-  await syncBotCommands();
+  await syncBotCommands(chatId);
 
   if (msg.chat.type === "private") {
     if (command === "/start") {
