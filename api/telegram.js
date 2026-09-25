@@ -58,11 +58,51 @@ async function isCreator(chatId, userId) {
 async function refreshPinned(chatId, { pin = false } = {}) {
   const text = await leaderboardText(chatId);
   const group = await getGroup(chatId);
-  const previousMessageId = group?.leaderboard_message_id || null;
-  let messageId = previousMessageId;
+  let messageId = group?.leaderboard_message_id || null;
   let recreated = false;
+  let adoptedPinned = false;
+  let currentPinnedId = null;
 
-  if (messageId) {
+  // First prefer the TUZ leaderboard that is ACTUALLY pinned in Telegram.
+  // This lets admins pin the board manually once; the bot only edits that
+  // same pinned message afterwards and does not need Pin messages permission.
+  try {
+    const chat = await tg("getChat", { chat_id: chatId });
+    const pinned = chat?.pinned_message || null;
+    currentPinnedId = pinned?.message_id || null;
+
+    if (
+      currentPinnedId &&
+      String(pinned?.text || "").includes("TUZ LEADERBOARD")
+    ) {
+      try {
+        await tg("editMessageText", {
+          chat_id: chatId,
+          message_id: currentPinnedId,
+          text,
+          parse_mode: "HTML",
+          disable_web_page_preview: true
+        });
+        messageId = currentPinnedId;
+        adoptedPinned = true;
+        await setLeaderboardMessage(chatId, messageId);
+      } catch (error) {
+        if (String(error.message).includes("message is not modified")) {
+          messageId = currentPinnedId;
+          adoptedPinned = true;
+          await setLeaderboardMessage(chatId, messageId);
+        } else {
+          console.error("refreshPinned pinned-board edit failed", error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("refreshPinned getChat failed", error);
+  }
+
+  // If there is no usable manually pinned TUZ board, update the board stored
+  // in the database as before.
+  if (!adoptedPinned && messageId) {
     try {
       await tg("editMessageText", {
         chat_id: chatId,
@@ -73,7 +113,7 @@ async function refreshPinned(chatId, { pin = false } = {}) {
       });
     } catch (error) {
       if (!String(error.message).includes("message is not modified")) {
-        console.error("refreshPinned edit failed, recreating board", error);
+        console.error("refreshPinned tracked-board edit failed, recreating", error);
         messageId = null;
       }
     }
@@ -86,56 +126,39 @@ async function refreshPinned(chatId, { pin = false } = {}) {
     await setLeaderboardMessage(chatId, messageId);
   }
 
-  // If we had to recreate the leaderboard, always repair the pin as well.
-  // /leaderboard and /top also explicitly verify that the tracked board
-  // is the actual pinned leaderboard, preventing a stale pinned copy.
-  let pinOk = true;
-  if (pin || recreated) {
+  // If admins manually pinned a TUZ board, no pin permission is needed:
+  // editing a bot-authored pinned message is enough.
+  if (adoptedPinned) {
+    return {
+      messageId,
+      pinOk: true,
+      recreated,
+      adoptedPinned: true
+    };
+  }
+
+  // Only try to pin automatically when explicitly requested or after creating
+  // a replacement board. If the bot lacks pin rights, admins can pin the
+  // created TUZ leaderboard manually once and future updates will adopt it.
+  let pinOk = currentPinnedId === messageId;
+  if ((pin || recreated) && !pinOk) {
     try {
-      const chat = await tg("getChat", { chat_id: chatId });
-      const pinned = chat?.pinned_message || null;
-      const pinnedId = pinned?.message_id || null;
-
-      // Only unpin a different message when it is clearly an older
-      // TUZ leaderboard. Never disturb an unrelated manual group pin.
-      if (
-        pinnedId &&
-        pinnedId !== messageId &&
-        String(pinned?.text || "").includes("TUZ LEADERBOARD")
-      ) {
-        await tg("unpinChatMessage", {
-          chat_id: chatId,
-          message_id: pinnedId
-        }).catch((error) => {
-          console.error("refreshPinned old board unpin failed", error);
-        });
-      }
-
-      if (pinnedId !== messageId) {
-        await tg("pinChatMessage", {
-          chat_id: chatId,
-          message_id: messageId,
-          disable_notification: true
-        });
-      }
+      await tg("pinChatMessage", {
+        chat_id: chatId,
+        message_id: messageId,
+        disable_notification: true
+      });
 
       const verifiedChat = await tg("getChat", { chat_id: chatId });
       pinOk = verifiedChat?.pinned_message?.message_id === messageId;
-      if (!pinOk) {
-        console.error(
-          "refreshPinned verification failed",
-          { chatId, expected: messageId, actual: verifiedChat?.pinned_message?.message_id || null }
-        );
-      }
     } catch (error) {
       pinOk = false;
-      console.error("refreshPinned pin/verify failed", error);
+      console.error("refreshPinned automatic pin failed", error);
     }
   }
 
-  return { messageId, pinOk, recreated };
+  return { messageId, pinOk, recreated, adoptedPinned: false };
 }
-
 
 const HUMAN_EMOJIS = {
   frog: "🐸",
@@ -326,12 +349,17 @@ async function handleCommand(msg, req) {
 
   if (command === "/leaderboard" || command === "/top") {
     const refreshed = await refreshPinned(chatId, { pin: true });
-    if (refreshed.pinOk) {
-      await send(chatId, "🏆 <b>Текущий топ обновлён.</b> Закреплённый лидерборд синхронизирован.");
+    if (refreshed.adoptedPinned) {
+      await send(
+        chatId,
+        "🏆 <b>Текущий топ обновлён.</b> Обновил именно тот TUZ-лидерборд, который сейчас закреплён."
+      );
+    } else if (refreshed.pinOk) {
+      await send(chatId, "🏆 <b>Текущий топ обновлён.</b> Лидерборд синхронизирован.");
     } else {
       await send(
         chatId,
-        "🏆 <b>Текущий топ обновлён.</b> Но Telegram не подтвердил закрепление нового лидерборда — проверь право бота <b>Pin messages</b>."
+        "🏆 <b>Текущий топ обновлён.</b> Закрепи созданный TUZ-лидерборд вручную один раз — дальше бот будет обновлять именно его без права <b>Pin messages</b>."
       );
     }
     return true;
