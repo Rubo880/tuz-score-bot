@@ -57,8 +57,10 @@ async function isCreator(chatId, userId) {
 
 async function refreshPinned(chatId, { pin = false } = {}) {
   const text = await leaderboardText(chatId);
-  let group = await getGroup(chatId);
-  let messageId = group?.leaderboard_message_id || null;
+  const group = await getGroup(chatId);
+  const previousMessageId = group?.leaderboard_message_id || null;
+  let messageId = previousMessageId;
+  let recreated = false;
 
   if (messageId) {
     try {
@@ -80,22 +82,58 @@ async function refreshPinned(chatId, { pin = false } = {}) {
   if (!messageId) {
     const board = await send(chatId, text);
     messageId = board.message_id;
+    recreated = true;
     await setLeaderboardMessage(chatId, messageId);
   }
 
-  if (pin) {
+  // If we had to recreate the leaderboard, always repair the pin as well.
+  // /leaderboard and /top also explicitly verify that the tracked board
+  // is the actual pinned leaderboard, preventing a stale pinned copy.
+  let pinOk = true;
+  if (pin || recreated) {
     try {
-      await tg("pinChatMessage", {
-        chat_id: chatId,
-        message_id: messageId,
-        disable_notification: true
-      });
+      const chat = await tg("getChat", { chat_id: chatId });
+      const pinned = chat?.pinned_message || null;
+      const pinnedId = pinned?.message_id || null;
+
+      // Only unpin a different message when it is clearly an older
+      // TUZ leaderboard. Never disturb an unrelated manual group pin.
+      if (
+        pinnedId &&
+        pinnedId !== messageId &&
+        String(pinned?.text || "").includes("TUZ LEADERBOARD")
+      ) {
+        await tg("unpinChatMessage", {
+          chat_id: chatId,
+          message_id: pinnedId
+        }).catch((error) => {
+          console.error("refreshPinned old board unpin failed", error);
+        });
+      }
+
+      if (pinnedId !== messageId) {
+        await tg("pinChatMessage", {
+          chat_id: chatId,
+          message_id: messageId,
+          disable_notification: true
+        });
+      }
+
+      const verifiedChat = await tg("getChat", { chat_id: chatId });
+      pinOk = verifiedChat?.pinned_message?.message_id === messageId;
+      if (!pinOk) {
+        console.error(
+          "refreshPinned verification failed",
+          { chatId, expected: messageId, actual: verifiedChat?.pinned_message?.message_id || null }
+        );
+      }
     } catch (error) {
-      console.error("refreshPinned pin failed", error);
+      pinOk = false;
+      console.error("refreshPinned pin/verify failed", error);
     }
   }
 
-  return messageId;
+  return { messageId, pinOk, recreated };
 }
 
 
@@ -287,8 +325,15 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/leaderboard" || command === "/top") {
-    await refreshPinned(chatId, { pin: true });
-    await send(chatId, "🏆 <b>Текущий топ обновлён.</b> Смотри закреплённый лидерборд.");
+    const refreshed = await refreshPinned(chatId, { pin: true });
+    if (refreshed.pinOk) {
+      await send(chatId, "🏆 <b>Текущий топ обновлён.</b> Закреплённый лидерборд синхронизирован.");
+    } else {
+      await send(
+        chatId,
+        "🏆 <b>Текущий топ обновлён.</b> Но Telegram не подтвердил закрепление нового лидерборда — проверь право бота <b>Pin messages</b>."
+      );
+    }
     return true;
   }
 
