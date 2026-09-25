@@ -2,6 +2,8 @@ import crypto from "crypto";
 import {
   applyGrow,
   applyGroupTuzRoll,
+  buyVaultShield,
+  collectVault,
   createPvpChallenge,
   claimHumanCheckPrompt,
   displayName,
@@ -10,9 +12,12 @@ import {
   getRandomRollTarget,
   getPvpStats,
   getUserById,
+  getUserByUsername,
   getUserScore,
+  getVaultState,
   invalidateMessage,
   processMessage,
+  raidVault,
   resolveHumanCheck,
   setLeaderboardMessage,
   settlePvpChallenge
@@ -263,6 +268,62 @@ function formatCooldown(seconds) {
 }
 
 
+function vaultBar(percent) {
+  const safe = Math.max(0, Math.min(100, Number(percent || 0)));
+  const filled = Math.max(0, Math.min(10, Math.round(safe / 10)));
+  return "█".repeat(filled) + "░".repeat(10 - filled);
+}
+
+function vaultKeyboard(userId) {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "📥 Забрать тузы",
+          callback_data: "vault:collect:" + userId
+        }
+      ],
+      [
+        {
+          text: "🛡 Купить щит — 7",
+          callback_data: "vault:shield:" + userId
+        }
+      ]
+    ]
+  };
+}
+
+function vaultCardText(user, state, score, notice = "") {
+  const points = Number(state?.vault_points || 0);
+  const percent = Number(state?.vault_percent || 0);
+  const next = Number(state?.next_point_seconds || 0);
+  const shield = Number(state?.shield_seconds || 0);
+  const raid = Number(state?.raid_cooldown_seconds || 0);
+
+  const lines = [
+    "🏦 <b>TUZ ХРАНИЛИЩЕ</b>",
+    "",
+    "<b>" + escapeHtml(displayName(user)) + "</b>",
+    "🃏 Рейтинг: <b>" + Number(score || 0) + "</b>",
+    "🧪 Хранилище: <b>" + points + "/10</b> — <b>" + percent + "%</b>",
+    "<code>" + vaultBar(percent) + "</code>",
+    points >= 10
+      ? "⚡ Статус: <b>FULL</b>"
+      : "⏱ Следующий туз через <b>" + formatCooldown(next) + "</b>",
+    "🛡 Защита: " + (shield > 0 ? "<b>" + formatCooldown(shield) + "</b>" : "нет"),
+    "⚔️ Налёт: " + (raid > 0 ? "через <b>" + formatCooldown(raid) + "</b>" : "<b>готов</b>"),
+    "",
+    "Хранилище получает <b>+1 туз каждый час</b> и останавливается на 10/10.",
+    "При сборе есть <b>5%</b> шанс на Козырной сбор ×2."
+  ];
+
+  if (notice) {
+    lines.splice(2, 0, notice, "");
+  }
+
+  return lines.join("\n");
+}
+
 function signed(value) {
   const n = Number(value || 0);
   if (n > 0) return "+" + n;
@@ -293,6 +354,11 @@ function rulesText() {
     "• в минус уходить можно: например, при счёте 3 и результате −10 станет −7;\n" +
     "• <code>/grow</code> — раз в календарный день растит твой туз на случайное значение от −10 до +40; серия дней даёт бонус на 2, 4, 8, 16 и 32-й день;\n" +
     "• <code>/pvp N</code> — предложить группе дуэль на N очков. Ставка не может превышать твой текущий счёт; сопернику тоже должно хватать очков;\n" +
+    "• <code>/vault</code> — хранилище: +1 туз каждый час, максимум 10. Кнопкой можно забрать накопленное в рейтинг; 5% шанс Козырного сбора ×2;\n" +
+    "• щит стоит <b>7</b> рейтинговых очков и защищает хранилище <b>2 часа</b>; повторная покупка — не чаще чем раз в 2 часа;\n" +
+    "• <code>/raid</code> — налёт на другого игрока раз в <b>6 часов</b>. Шанс успеха <b>30%</b>; успешная добыча сразу идёт в рейтинг нападающего;\n" +
+    "• при налёте собственный щит нападающего снимается. Жертва после действительного налёта получает защиту на <b>2 часа</b>;\n" +
+    "• при 10/10 успешный налёт крадёт <b>5–7</b> тузов; при меньшем запасе добыча уменьшается;\n" +
     "• каждый день бот автоматически объявляет <b>Тузоида дня</b> по числу засчитанных упоминаний за сутки."
   );
 }
@@ -311,7 +377,7 @@ async function handleCommand(msg, req) {
       );
     } else if (command === "/rules") {
       await send(chatId, rulesText());
-    } else if (["/setup", "/leaderboard", "/top", "/me", "/web", "/undo", "/tuzroll", "/roll", "/grow", "/pvp"].includes(command)) {
+    } else if (["/setup", "/leaderboard", "/me", "/undo", "/tuzroll", "/roll", "/grow", "/pvp", "/vault", "/raid"].includes(command)) {
       await send(chatId, "Эта команда работает <b>в группе</b>, где я веду лидерборд.");
     }
     return true;
@@ -347,7 +413,7 @@ async function handleCommand(msg, req) {
     return true;
   }
 
-  if (command === "/leaderboard" || command === "/top") {
+  if (command === "/leaderboard") {
     const refreshed = await refreshPinned(chatId, { pin: true });
     if (refreshed.adoptedPinned) {
       await send(
@@ -366,9 +432,10 @@ async function handleCommand(msg, req) {
   }
 
   if (command === "/me") {
-    const [score, pvp] = await Promise.all([
+    const [score, pvp, vault] = await Promise.all([
       getUserScore(chatId, msg.from.id),
-      getPvpStats(chatId, msg.from.id)
+      getPvpStats(chatId, msg.from.id),
+      getVaultState(chatId, msg.from.id)
     ]);
     const winRate = pvp.battles_total > 0
       ? ((pvp.wins / pvp.battles_total) * 100).toFixed(2)
@@ -377,12 +444,132 @@ async function handleCommand(msg, req) {
     await send(
       chatId,
       "👤 <b>" + escapeHtml(displayName(msg.from)) + "</b>\n" +
-        "🃏 Твой счёт: <b>" + score + "</b>\n\n" +
+        "🃏 Твой счёт: <b>" + score + "</b>\n" +
+        "🧪 Хранилище: <b>" + Number(vault.vault_points || 0) + "/10</b> — <b>" +
+        Number(vault.vault_percent || 0) + "%</b>\n\n" +
         "⚔️ <b>PvP-статистика</b>\n" +
         "🏆 Процент выигрышей: <b>" + winRate + "%</b>\n" +
         "🔥 Текущий стрик побед: <b>" + pvp.win_streak_current + "</b>\n" +
         "👑 Лучший стрик побед: <b>" + pvp.win_streak_max + "</b>"
     );
+    return true;
+  }
+
+  if (command === "/vault") {
+    const [score, state] = await Promise.all([
+      getUserScore(chatId, msg.from.id),
+      getVaultState(chatId, msg.from.id)
+    ]);
+
+    await send(
+      chatId,
+      vaultCardText(msg.from, state, score),
+      { reply_markup: vaultKeyboard(msg.from.id) }
+    );
+    return true;
+  }
+
+  if (command === "/raid") {
+    let victim = null;
+    const replied = msg.reply_to_message?.from;
+
+    if (replied && !replied.is_bot) {
+      victim = await getUserById(chatId, replied.id);
+      if (!victim) {
+        victim = {
+          user_id: replied.id,
+          username: replied.username || null,
+          first_name: replied.first_name || null,
+          last_name: replied.last_name || null
+        };
+      }
+    } else {
+      const parts = (msg.text || "").trim().split(/\s+/);
+      if (parts[1]) {
+        victim = await getUserByUsername(chatId, parts[1]);
+      }
+    }
+
+    if (!victim) {
+      await send(
+        chatId,
+        "🏴‍☠️ <b>TUZ RAID</b>\n\nОтветь командой <code>/raid</code> на сообщение игрока или напиши <code>/raid @username</code>."
+      );
+      return true;
+    }
+
+    const victimId = Number(victim.user_id || victim.id || 0);
+    if (!victimId || victimId === msg.from.id) {
+      await send(chatId, "🏴‍☠️ Нельзя устроить налёт на собственное хранилище.");
+      return true;
+    }
+
+    const result = await raidVault(chatId, msg.from, victimId);
+    if (!result) {
+      await send(chatId, "🏴‍☠️ Не удалось провести налёт. Попробуй ещё раз.");
+      return true;
+    }
+
+    const status = String(result.result_status || "");
+    const victimName = escapeHtml(displayName(victim));
+
+    if (status === "cooldown") {
+      await send(
+        chatId,
+        "⏳ Следующий налёт будет доступен через <b>" +
+          formatCooldown(result.raid_cooldown_seconds) +
+          "</b>."
+      );
+      return true;
+    }
+
+    if (status === "shielded") {
+      await send(
+        chatId,
+        "🛡 <b>" + victimName + "</b> сейчас под защитой. Щит спадёт примерно через <b>" +
+          formatCooldown(result.victim_shield_seconds) +
+          "</b>."
+      );
+      return true;
+    }
+
+    if (status === "empty") {
+      await send(
+        chatId,
+        "🏚 У <b>" + victimName + "</b> хранилище пустое. Налёт не потрачен."
+      );
+      return true;
+    }
+
+    if (status !== "go") {
+      await send(chatId, "🏴‍☠️ Этот налёт сейчас недоступен.");
+      return true;
+    }
+
+    const success = result.success === true || String(result.success) === "true";
+    if (success) {
+      await send(
+        chatId,
+        "🏴‍☠️ <b>TUZ RAID — УСПЕХ</b>\n\n" +
+          "<b>" + escapeHtml(displayName(msg.from)) + "</b> налетел на <b>" + victimName + "</b>.\n" +
+          "💰 Украдено: <b>+" + Number(result.loot || 0) + "</b> очков прямо в рейтинг.\n" +
+          "🧪 У жертвы осталось: <b>" + Number(result.victim_points_after || 0) + "/10</b>.\n" +
+          "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
+          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>6 часов</b>.\n\n" +
+          "🃏 Новый счёт нападающего: <b>" + Number(result.attacker_score || 0) + "</b>."
+      );
+    } else {
+      await send(
+        chatId,
+        "💨 <b>TUZ RAID — ПРОМАХ</b>\n\n" +
+          "<b>" + escapeHtml(displayName(msg.from)) + "</b> не смог ограбить <b>" + victimName + "</b>.\n" +
+          "Шанс успеха был <b>30%</b>.\n" +
+          "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
+          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>6 часов</b>."
+      );
+    }
+
+    await refreshPinned(chatId);
     return true;
   }
 
@@ -610,16 +797,6 @@ async function handleCommand(msg, req) {
     return true;
   }
 
-  if (command === "/web") {
-    const group = await ensureGroup(msg.chat);
-    const base = baseUrl(req);
-    await send(
-      chatId,
-      base ? "🌐 " + base + "/g/" + group.board_key : "Веб-ссылка пока недоступна."
-    );
-    return true;
-  }
-
   return false;
 }
 
@@ -627,6 +804,135 @@ async function handleCommand(msg, req) {
 async function handleCallback(query) {
   const data = String(query?.data || "");
   const msg = query.message;
+
+  if (data.startsWith("vault:")) {
+    if (!msg?.chat) return true;
+
+    const parts = data.split(":");
+    const action = parts[1] || "";
+    const ownerId = Number(parts[2]);
+
+    if (!Number.isSafeInteger(ownerId) || query.from.id !== ownerId) {
+      await tg("answerCallbackQuery", {
+        callback_query_id: query.id,
+        text: "Это хранилище другого игрока.",
+        show_alert: true
+      }).catch(() => {});
+      return true;
+    }
+
+    if (action === "collect") {
+      const result = await collectVault(msg.chat.id, query.from);
+      if (!result) {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Не удалось собрать тузы.",
+          show_alert: true
+        }).catch(() => {});
+        return true;
+      }
+
+      const collected = Number(result.collected || 0);
+      const payout = Number(result.payout || 0);
+      const jackpot = result.jackpot === true || String(result.jackpot) === "true";
+
+      if (collected <= 0) {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Хранилище пока пустое."
+        }).catch(() => {});
+      } else {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: jackpot
+            ? "🃏 Козырной сбор ×2! +" + payout
+            : "Собрано +" + payout
+        }).catch(() => {});
+      }
+
+      const [score, state] = await Promise.all([
+        getUserScore(msg.chat.id, ownerId),
+        getVaultState(msg.chat.id, ownerId)
+      ]);
+      const notice = collected > 0
+        ? (jackpot
+          ? "🃏 <b>КОЗЫРНОЙ СБОР ×2!</b> В рейтинг ушло <b>+" + payout + "</b>."
+          : "📥 Собрано в рейтинг: <b>+" + payout + "</b>.")
+        : "⏳ Пока нечего собирать.";
+
+      await tg("editMessageText", {
+        chat_id: msg.chat.id,
+        message_id: msg.message_id,
+        text: vaultCardText(query.from, state, score, notice),
+        parse_mode: "HTML",
+        reply_markup: vaultKeyboard(ownerId)
+      });
+
+      if (collected > 0) {
+        await refreshPinned(msg.chat.id);
+      }
+      return true;
+    }
+
+    if (action === "shield") {
+      const result = await buyVaultShield(msg.chat.id, query.from);
+      const status = String(result?.result_status || "");
+
+      if (status === "ok") {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Щит включён на 2 часа 🛡"
+        }).catch(() => {});
+      } else if (status === "funds") {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Нужно минимум 7 рейтинговых очков.",
+          show_alert: true
+        }).catch(() => {});
+      } else if (status === "active") {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Щит уже активен ещё " + formatCooldown(result.seconds_remaining) + ".",
+          show_alert: true
+        }).catch(() => {});
+      } else if (status === "cooldown") {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Щит можно купить через " + formatCooldown(result.seconds_remaining) + ".",
+          show_alert: true
+        }).catch(() => {});
+      } else {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Не удалось включить щит.",
+          show_alert: true
+        }).catch(() => {});
+      }
+
+      const [score, state] = await Promise.all([
+        getUserScore(msg.chat.id, ownerId),
+        getVaultState(msg.chat.id, ownerId)
+      ]);
+      const notice = status === "ok"
+        ? "🛡 Щит куплен за <b>7</b> очков и включён на <b>2 часа</b>."
+        : "";
+
+      await tg("editMessageText", {
+        chat_id: msg.chat.id,
+        message_id: msg.message_id,
+        text: vaultCardText(query.from, state, score, notice),
+        parse_mode: "HTML",
+        reply_markup: vaultKeyboard(ownerId)
+      });
+
+      if (status === "ok") {
+        await refreshPinned(msg.chat.id);
+      }
+      return true;
+    }
+
+    return true;
+  }
 
   if (data.startsWith("human:")) {
     if (!msg?.chat) return true;
