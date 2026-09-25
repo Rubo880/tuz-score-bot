@@ -25,6 +25,32 @@ import {
 import { leaderboardText } from "../lib/leaderboard.js";
 import { escapeHtml, tg, WEBHOOK_SECRET } from "../lib/telegram.js";
 
+let commandSyncPromise;
+
+async function syncBotCommands() {
+  if (!commandSyncPromise) {
+    commandSyncPromise = tg("setMyCommands", {
+      commands: [
+        { command: "setup", description: "Создать и закрепить лидерборд" },
+        { command: "leaderboard", description: "Обновить текущий топ" },
+        { command: "grow", description: "Растить туз раз в день" },
+        { command: "pvp", description: "PvP-дуэль: /pvp 10" },
+        { command: "me", description: "Показать мой счёт" },
+        { command: "vault", description: "Хранилище: сбор и щит" },
+        { command: "raid", description: "Налёт: /raid @username или ответом" },
+        { command: "rules", description: "Правила и античит" },
+        { command: "undo", description: "Владелец: отменить очки за сообщение" },
+        { command: "tuzroll", description: "Общий Tuz Roll группы раз в 24ч" }
+      ]
+    }).catch((error) => {
+      commandSyncPromise = null;
+      console.error("setMyCommands sync failed", error);
+      return null;
+    });
+  }
+  return commandSyncPromise;
+}
+
 function getBody(req) {
   if (typeof req.body === "string") {
     try { return JSON.parse(req.body); } catch { return {}; }
@@ -367,6 +393,8 @@ async function handleCommand(msg, req) {
   const raw = (msg.text || "").trim().split(/\s+/)[0] || "";
   const command = raw.toLowerCase().split("@")[0];
   const chatId = msg.chat.id;
+
+  await syncBotCommands();
 
   if (msg.chat.type === "private") {
     if (command === "/start") {
