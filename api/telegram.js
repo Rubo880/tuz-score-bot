@@ -65,15 +65,29 @@ async function syncBotCommands(chatId = null) {
       }
     }
 
-    await tg("setMyCommands", {
-      scope: { type: "default" },
-      commands: BOT_COMMANDS
-    });
+    const setScopes = [
+      { type: "default" },
+      { type: "all_group_chats" },
+      { type: "all_chat_administrators" }
+    ];
 
-    await tg("setMyCommands", {
-      scope: { type: "all_group_chats" },
-      commands: BOT_COMMANDS
-    });
+    if (chatId) {
+      setScopes.push(
+        { type: "chat", chat_id: chatId },
+        { type: "chat_administrators", chat_id: chatId }
+      );
+    }
+
+    // Do not only delete old scopes: an administrator-specific command list
+    // has higher priority than the regular group list. Explicitly overwrite
+    // every relevant scope so removed commands (/top, /web) disappear for
+    // group owners/admins as well.
+    for (const scope of setScopes) {
+      await tg("setMyCommands", {
+        scope,
+        commands: BOT_COMMANDS
+      });
+    }
 
     return true;
   } catch (error) {
