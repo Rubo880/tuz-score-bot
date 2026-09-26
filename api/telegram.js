@@ -541,6 +541,7 @@ async function handleCommand(msg, req) {
       vaultCardText(msg.from, state, score),
       { reply_markup: vaultKeyboard(msg.from.id) }
     );
+    await refreshPinned(chatId);
     return true;
   }
 
@@ -579,6 +580,33 @@ async function handleCommand(msg, req) {
       return true;
     }
 
+    const victimState = await getVaultState(chatId, victimId);
+    const victimName = escapeHtml(displayName(victim));
+
+    if (Number(victimState.vault_points || 0) <= 0) {
+      await send(
+        chatId,
+        "🚫 <b>Налёт невозможен.</b>\n\n" +
+          "🏚 У <b>" + victimName + "</b> хранилище <b>0/50</b> — красть нечего.\n" +
+          "Попытка налёта не потрачена."
+      );
+      await refreshPinned(chatId);
+      return true;
+    }
+
+    if (Number(victimState.shield_seconds || 0) > 0) {
+      await send(
+        chatId,
+        "🚫 <b>Налёт невозможен.</b>\n\n" +
+          "🛡 Хранилище <b>" + victimName + "</b> сейчас под щитом.\n" +
+          "Защита спадёт примерно через <b>" +
+          formatCooldown(victimState.shield_seconds) +
+          "</b>. Попытка налёта не потрачена."
+      );
+      await refreshPinned(chatId);
+      return true;
+    }
+
     const result = await raidVault(chatId, msg.from, victimId);
     if (!result) {
       await send(chatId, "🏴‍☠️ Не удалось провести налёт. Попробуй ещё раз.");
@@ -586,7 +614,6 @@ async function handleCommand(msg, req) {
     }
 
     const status = String(result.result_status || "");
-    const victimName = escapeHtml(displayName(victim));
 
     if (status === "cooldown") {
       await send(
@@ -607,6 +634,7 @@ async function handleCommand(msg, req) {
           formatCooldown(result.victim_shield_seconds) +
           "</b>. Попытка налёта не потрачена."
       );
+      await refreshPinned(chatId);
       return true;
     }
 
@@ -617,6 +645,7 @@ async function handleCommand(msg, req) {
           "🏚 У <b>" + victimName + "</b> хранилище <b>0/50</b> — красть нечего.\n" +
           "Попытка налёта не потрачена."
       );
+      await refreshPinned(chatId);
       return true;
     }
 
@@ -631,6 +660,7 @@ async function handleCommand(msg, req) {
         chatId,
         "🏴‍☠️ <b>TUZ RAID — УСПЕХ</b>\n\n" +
           "<b>" + escapeHtml(displayName(msg.from)) + "</b> налетел на <b>" + victimName + "</b>.\n" +
+          "🧪 До налёта у жертвы было: <b>" + Number(result.victim_points_before || 0) + "/50</b>.\n" +
           "💰 Украдено: <b>+" + Number(result.loot || 0) + "</b> очков прямо в рейтинг.\n" +
           "🧪 У жертвы осталось: <b>" + Number(result.victim_points_after || 0) + "/50</b>.\n" +
           "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
@@ -642,6 +672,7 @@ async function handleCommand(msg, req) {
         chatId,
         "💨 <b>TUZ RAID — ПРОМАХ</b>\n\n" +
           "<b>" + escapeHtml(displayName(msg.from)) + "</b> не смог ограбить <b>" + victimName + "</b>.\n" +
+          "🧪 В хранилище жертвы было: <b>" + Number(result.victim_points_before || 0) + "/50</b>.\n" +
           "Шанс успеха был <b>30%</b>.\n" +
           "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
           "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>3 часа</b>."
