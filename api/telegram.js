@@ -370,22 +370,24 @@ function vaultCardText(user, state, score, notice = "") {
   const next = Number(state?.next_point_seconds || 0);
   const shield = Number(state?.shield_seconds || 0);
   const raid = Number(state?.raid_cooldown_seconds || 0);
+  const collect = Number(state?.collect_cooldown_seconds || 0);
 
   const lines = [
     "🏦 <b>TUZ ХРАНИЛИЩЕ</b>",
     "",
     "<b>" + escapeHtml(displayName(user)) + "</b>",
     "🃏 Рейтинг: <b>" + Number(score || 0) + "</b>",
-    "🧪 Хранилище: <b>" + points + "/10</b> — <b>" + percent + "%</b>",
+    "🧪 Хранилище: <b>" + points + "/50</b> — <b>" + percent + "%</b>",
     "<code>" + vaultBar(percent) + "</code>",
-    points >= 10
+    points >= 50
       ? "⚡ Статус: <b>FULL</b>"
       : "⏱ Следующий туз через <b>" + formatCooldown(next) + "</b>",
     "🛡 Защита: " + (shield > 0 ? "<b>" + formatCooldown(shield) + "</b>" : "нет"),
+    "📥 Сбор: " + (collect > 0 ? "через <b>" + formatCooldown(collect) + "</b>" : "<b>готов</b>"),
     "⚔️ Налёт: " + (raid > 0 ? "через <b>" + formatCooldown(raid) + "</b>" : "<b>готов</b>"),
     "",
-    "Хранилище получает <b>+1 туз каждый час</b> и останавливается на 10/10.",
-    "Собранные тузы сразу переходят в основной рейтинг."
+    "Хранилище заполняется от <b>0 до 50 за 6 часов</b>.",
+    "Собрать накопленное можно <b>раз в 6 часов</b>; оно сразу переходит в основной рейтинг."
   ];
 
   if (notice) {
@@ -425,11 +427,11 @@ function rulesText() {
     "• в минус уходить можно: например, при счёте 3 и результате −10 станет −7;\n" +
     "• <code>/grow</code> — раз в календарный день растит твой туз на случайное значение от −10 до +40; серия дней даёт бонус на 2, 4, 8, 16 и 32-й день;\n" +
     "• <code>/pvp N</code> — предложить группе дуэль на N очков. Ставка не может превышать твой текущий счёт; сопернику тоже должно хватать очков;\n" +
-    "• <code>/vault</code> — хранилище: +1 туз каждый час, максимум 10. Кнопкой можно забрать накопленное прямо в рейтинг;\n" +
+    "• <code>/vault</code> — хранилище заполняется от 0 до <b>50 за 6 часов</b>. Забрать накопленное в рейтинг можно <b>раз в 6 часов</b>;\n" +
     "• щит стоит <b>7</b> рейтинговых очков и защищает хранилище <b>2 часа</b>; повторная покупка — не чаще чем раз в 2 часа;\n" +
-    "• <code>/raid</code> — налёт на другого игрока раз в <b>6 часов</b>. Шанс успеха <b>30%</b>; успешная добыча сразу идёт в рейтинг нападающего;\n" +
+    "• <code>/raid</code> — налёт на другого игрока раз в <b>3 часа</b>. Шанс успеха <b>30%</b>; успешная добыча сразу идёт в рейтинг нападающего;\n" +
     "• при налёте собственный щит нападающего снимается. Жертва после действительного налёта получает защиту на <b>2 часа</b>;\n" +
-    "• при 10/10 успешный налёт крадёт <b>5–7</b> тузов; при меньшем запасе добыча уменьшается;\n" +
+    "• при 50/50 успешный налёт крадёт <b>45–47</b> тузов; при меньшем запасе добыча уменьшается примерно пропорционально;\n" +
     "• каждый день бот автоматически объявляет <b>Тузоида дня</b> по числу засчитанных упоминаний за сутки."
   );
 }
@@ -518,7 +520,7 @@ async function handleCommand(msg, req) {
       chatId,
       "👤 <b>" + escapeHtml(displayName(msg.from)) + "</b>\n" +
         "🃏 Твой счёт: <b>" + score + "</b>\n" +
-        "🧪 Хранилище: <b>" + Number(vault.vault_points || 0) + "/10</b> — <b>" +
+        "🧪 Хранилище: <b>" + Number(vault.vault_points || 0) + "/50</b> — <b>" +
         Number(vault.vault_percent || 0) + "%</b>\n\n" +
         "⚔️ <b>PvP-статистика</b>\n" +
         "🏆 Процент выигрышей: <b>" + winRate + "%</b>\n" +
@@ -612,7 +614,7 @@ async function handleCommand(msg, req) {
       await send(
         chatId,
         "🚫 <b>Налёт невозможен.</b>\n\n" +
-          "🏚 У <b>" + victimName + "</b> хранилище <b>0/10</b> — красть нечего.\n" +
+          "🏚 У <b>" + victimName + "</b> хранилище <b>0/50</b> — красть нечего.\n" +
           "Попытка налёта не потрачена."
       );
       return true;
@@ -630,9 +632,9 @@ async function handleCommand(msg, req) {
         "🏴‍☠️ <b>TUZ RAID — УСПЕХ</b>\n\n" +
           "<b>" + escapeHtml(displayName(msg.from)) + "</b> налетел на <b>" + victimName + "</b>.\n" +
           "💰 Украдено: <b>+" + Number(result.loot || 0) + "</b> очков прямо в рейтинг.\n" +
-          "🧪 У жертвы осталось: <b>" + Number(result.victim_points_after || 0) + "/10</b>.\n" +
+          "🧪 У жертвы осталось: <b>" + Number(result.victim_points_after || 0) + "/50</b>.\n" +
           "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
-          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>6 часов</b>.\n\n" +
+          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>3 часа</b>.\n\n" +
           "🃏 Новый счёт нападающего: <b>" + Number(result.attacker_score || 0) + "</b>."
       );
     } else {
@@ -642,7 +644,7 @@ async function handleCommand(msg, req) {
           "<b>" + escapeHtml(displayName(msg.from)) + "</b> не смог ограбить <b>" + victimName + "</b>.\n" +
           "Шанс успеха был <b>30%</b>.\n" +
           "🛡 Жертва получает защиту на <b>2 часа</b>.\n" +
-          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>6 часов</b>."
+          "⚠️ Щит нападающего, если был, снят. Следующий налёт — через <b>3 часа</b>."
       );
     }
 
@@ -909,15 +911,22 @@ async function handleCallback(query) {
         return true;
       }
 
+      const status = String(result.result_status || "");
       const collected = Number(result.collected || 0);
       const payout = Number(result.payout || 0);
 
-      if (collected <= 0) {
+      if (status === "cooldown") {
+        await tg("answerCallbackQuery", {
+          callback_query_id: query.id,
+          text: "Следующий сбор через " + formatCooldown(result.seconds_remaining) + ".",
+          show_alert: true
+        }).catch(() => {});
+      } else if (status === "empty") {
         await tg("answerCallbackQuery", {
           callback_query_id: query.id,
           text: "Хранилище пока пустое."
         }).catch(() => {});
-      } else {
+      } else if (status === "ok") {
         await tg("answerCallbackQuery", {
           callback_query_id: query.id,
           text: "Собрано +" + payout
@@ -928,9 +937,13 @@ async function handleCallback(query) {
         getUserScore(msg.chat.id, ownerId),
         getVaultState(msg.chat.id, ownerId)
       ]);
-      const notice = collected > 0
+      const notice = status === "ok"
         ? "📥 Собрано в рейтинг: <b>+" + payout + "</b>."
-        : "⏳ Пока нечего собирать.";
+        : status === "cooldown"
+          ? "⏳ Следующий сбор будет доступен через <b>" +
+            formatCooldown(result.seconds_remaining) +
+            "</b>."
+          : "⏳ Пока нечего собирать.";
 
       await tg("editMessageText", {
         chat_id: msg.chat.id,
